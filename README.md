@@ -6,12 +6,33 @@ Interaktives Script zur Installation und Konfiguration des Zabbix Agents
 (`zabbix-agent` oder `zabbix-agent2`) auf **Debian/Ubuntu** – inklusive
 PSK-Verschlüsselung und optionaler Registrierung des Hosts über die Zabbix-API.
 
+### Voraussetzungen
+
+- Debian 12/13 oder Ubuntu 22.04/24.04/26.04 (amd64 oder arm64)
+- root-Rechte (`sudo`)
+- Internetzugang zu `repo.zabbix.com`
+- Für die API-Registrierung: Zabbix-Frontend ab Version 7.0 und ein API-Token
+
 ### Aufruf
+
+Script herunterladen, kurz ansehen und ausführen:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/hannes4060/zabbix/main/zabbix-agent-install.sh
+less zabbix-agent-install.sh
 sudo bash zabbix-agent-install.sh
 ```
+
+Oder per Git:
+
+```bash
+git clone https://github.com/hannes4060/zabbix.git
+sudo bash zabbix/zabbix-agent-install.sh
+```
+
+> Das Script läuft interaktiv und stellt Fragen. Ein direktes
+> `curl … | sudo bash` funktioniert deshalb nicht – erst herunterladen,
+> dann ausführen.
 
 Vorgaben lassen sich per Umgebungsvariable setzen:
 
@@ -20,8 +41,8 @@ sudo ZBX_VERSION=8.0 ZBX_API_URL=https://zabbix.example.de ZBX_API_TOKEN=xxxx \
   bash zabbix-agent-install.sh
 ```
 
-> Das Repo ist privat. Für den `curl`-Download wird dann ein Token benötigt,
-> alternativ das Script per `scp` auf den Host kopieren.
+> Ein Token in der Kommandozeile landet in der Shell-History. Lässt du
+> `ZBX_API_TOKEN` weg, fragt das Script ihn verdeckt ab.
 
 ### Was das Script macht
 
@@ -70,3 +91,23 @@ diese Methoden beschränkt ist (Allow list).
 ### Log
 
 Installationsausgaben landen in `/var/log/zabbix-agent-install.log` (Rechte 600).
+
+### Sicherheit
+
+- Das Repository enthält keine Zugangsdaten. PSK und API-Token werden erst
+  beim Ausführen eingegeben bzw. erzeugt und nur auf dem Zielhost gespeichert.
+- Bitte niemals echte Tokens, PSKs oder interne Adressen in Issues oder
+  Pull Requests posten.
+
+### Haftungsausschluss
+
+Das Script installiert Pakete und ändert Systemkonfigurationen mit
+root-Rechten. Nutzung auf eigene Verantwortung – vor dem produktiven Einsatz
+bitte auf einem Testsystem ausprobieren.
+
+## Lizenz
+
+[MIT](LICENSE) © hannes4060
+
+Fehler und Verbesserungsvorschläge gerne als
+[Issue](https://github.com/hannes4060/zabbix/issues) oder Pull Request.
