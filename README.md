@@ -105,6 +105,86 @@ Das Script installiert Pakete und ändert Systemkonfigurationen mit
 root-Rechten. Nutzung auf eigene Verantwortung – vor dem produktiven Einsatz
 bitte auf einem Testsystem ausprobieren.
 
+## zabbix-proxy-install.sh
+
+Interaktives Script zum Ausrollen eines Zabbix Proxys auf **Debian/Ubuntu** –
+mit SQLite3, MariaDB/MySQL oder PostgreSQL, PSK-Verschlüsselung zum Server und
+optionaler Registrierung des Proxys über die Zabbix-API. Aufbau, Bedienung und
+Voraussetzungen wie beim Agent-Script.
+
+### Aufruf
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/hannes4060/zabbix/main/zabbix-proxy-install.sh
+less zabbix-proxy-install.sh
+sudo bash zabbix-proxy-install.sh
+```
+
+Vorgaben per Umgebungsvariable (`ZBX_VERSION`, `ZBX_API_URL`, `ZBX_API_TOKEN`)
+funktionieren genauso wie beim Agent-Script.
+
+### Was das Script macht
+
+**Fragt ab:**
+
+- Zabbix-Version (Standard 8.0)
+- Datenbank: SQLite3 (Standard), MariaDB/MySQL oder PostgreSQL – jeweils lokal
+- Modus: Aktiv (Standard) oder Passiv
+- Server-Adresse(n): aktiv HA-Knoten mit `;`, passiv erlaubte Server mit `,`
+- Proxy-Name, bei Passiv die Adresse, unter der der Server den Proxy erreicht
+- Offline-Puffer in Stunden (`ProxyOfflineBuffer`, Standard 24)
+- PSK-Identity (PSK wird erzeugt oder ein vorhandener weiterverwendet)
+- Bei aktivem `ufw`: Freigabe von 10051/tcp für Agent-Netze (und bei Passiv für den Server)
+- Optional API-Registrierung: Frontend-URL, Token, erlaubte Proxy-Adresse,
+  Proxy-Gruppe, Host zur Selbstüberwachung
+
+**Führt aus (nach Bestätigung):**
+
+1. Zabbix-Repository einrichten, `zabbix-proxy-<db>` installieren
+2. Datenbank einrichten:
+   - SQLite3: `/var/lib/zabbix/zabbix_proxy.db`, wird beim ersten Start angelegt
+   - MariaDB/PostgreSQL: Server installieren, DB `zabbix_proxy` und Benutzer
+     `zbx_proxy` mit Zufallspasswort anlegen, Schema importieren
+     (bei erneutem Lauf wird ein vorhandenes Schema nicht angefasst)
+3. PSK nach `/etc/zabbix/zabbix_proxy.psk` schreiben (`root:zabbix`, 640)
+4. Proxy-Konfiguration sichern und einen verwalteten Block schreiben
+   (bei erneutem Lauf wird nur dieser Block ersetzt; Datei `root:zabbix`, 640,
+   da sie ggf. das DB-Passwort enthält)
+5. Proxy per API anlegen bzw. aktualisieren, Dienst starten,
+   Erreichbarkeit des Servers prüfen
+6. Optional Host `<Proxy-Name>` mit Template *Zabbix proxy health* anlegen
+   (überwacht durch den neuen Proxy)
+7. Bis zu 60 s warten, bis der Server Kontakt zum Proxy meldet
+
+### Modi
+
+| Modus | Proxy-Konfig | Frontend (API) |
+|---|---|---|
+| Aktiv | `ProxyMode=0`, `Server=<Server/HA-Knoten>`, `TLSConnect=psk` | „Verbindungen vom Proxy“: PSK, optional erlaubte Adresse |
+| Passiv | `ProxyMode=1`, `Server=<erlaubte Server>`, `TLSAccept=psk` | Adresse + Port 10051, „Verbindungen zum Proxy“: PSK |
+
+### Hinweise
+
+- Zabbix 8.0 verlangt mindestens **MariaDB 10.11** bzw. **PostgreSQL 15**.
+  Ubuntu 22.04 bringt ältere Versionen mit – dort SQLite3 verwenden
+  (das Script warnt).
+- Proxy und Server sollten die gleiche Hauptversion haben; das Script
+  vergleicht das mit der Version des Frontends.
+- Ein Wechsel der Datenbank (z. B. SQLite3 → PostgreSQL) entfernt das alte
+  Proxy-Paket; die alte Konfiguration wird vorher gesichert.
+- Den Proxy-Host selbst (CPU, Platte, …) überwachst du anschließend mit
+  `zabbix-agent-install.sh` – Überwachung durch *Zabbix-Proxy*, Adresse `127.0.0.1`.
+
+### API-Token
+
+Benötigte API-Methoden: `apiinfo.version`, `proxy.get`, `proxy.create`,
+`proxy.update`, `proxygroup.get`, `template.get`, `host.get`, `host.create`,
+`hostgroup.get`, `hostgroup.create`.
+
+### Log
+
+Installationsausgaben landen in `/var/log/zabbix-proxy-install.log` (Rechte 600).
+
 ## Lizenz
 
 [MIT](LICENSE) © hannes4060
