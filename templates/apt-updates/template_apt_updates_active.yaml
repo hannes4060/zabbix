@@ -10,7 +10,7 @@ zabbix_export:
       description: |
         Führt auf Debian/Ubuntu-Hosts regelmäßig "apt update" aus und meldet,
         wie viele Pakete aktualisiert werden können (aktive Checks).
-        Benötigt userparameter_apt_updates.conf und eine sudo-Regel auf dem Host (siehe ANLEITUNG.md).
+        Benötigt userparameter_apt_updates.conf und eine sudo-Regel auf dem Host (siehe templates/apt-updates/README.md).
       groups:
         - name: Templates/Applications
       items:

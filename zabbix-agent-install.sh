@@ -44,6 +44,17 @@ TEMPLATE_NAME="" TEMPLATE_ID=""
 PROXY_ID="" PROXY_NAME="" MONITORED_BY=0
 HOST_ID=""
 
+# ---------- Zusatz: apt-Updates (templates/apt-updates im Repo) --------------
+ZBX_REPO_RAW="${ZBX_REPO_RAW:-https://raw.githubusercontent.com/hannes4060/zabbix/main}"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo .)
+APT_DIR="templates/apt-updates"
+APT_SUDOERS="/etc/sudoers.d/zabbix-apt"
+APT_SUDO_RULE="zabbix ALL=(root) NOPASSWD: /usr/bin/apt-get update -qq"
+APT_UP_FILE="userparameter_apt_updates.conf"
+APT_KEY="apt.updates.count"
+APT_UPDATES=0 APT_TPL_NAME="" APT_TPL_FILE="" APT_TPL_ID="" APT_TPL_IMPORT=0 APT_TPL_LINKED=0
+APT_UP_DIR=""
+
 # ---------- Ausgabe ----------------------------------------------------------
 if [[ -t 1 ]]; then
   C_R=$'\e[31m' C_G=$'\e[32m' C_Y=$'\e[33m' C_B=$'\e[1;34m' C_BOLD=$'\e[1m' C_0=$'\e[0m'
@@ -156,11 +167,26 @@ set_agent_vars() {
     AGENT_PKG=zabbix-agent2  AGENT_SVC=zabbix-agent2  AGENT_BIN=zabbix_agent2
     AGENT_CONF=/etc/zabbix/zabbix_agent2.conf AGENT_LOG=/var/log/zabbix/zabbix_agent2.log
     OTHER_PKG=zabbix-agent   OTHER_CONF=/etc/zabbix/zabbix_agentd.conf
+    APT_UP_DIR=/etc/zabbix/zabbix_agent2.d
   else
     AGENT_PKG=zabbix-agent   AGENT_SVC=zabbix-agent   AGENT_BIN=zabbix_agentd
     AGENT_CONF=/etc/zabbix/zabbix_agentd.conf AGENT_LOG=/var/log/zabbix/zabbix_agentd.log
     OTHER_PKG=zabbix-agent2  OTHER_CONF=/etc/zabbix/zabbix_agent2.conf
+    APT_UP_DIR=/etc/zabbix/zabbix_agentd.d
   fi
+}
+
+# fetch_repo_file PFAD_IM_REPO ZIEL – erst neben dem Script suchen (git clone),
+# sonst aus dem GitHub-Repo laden
+fetch_repo_file() {
+  local rel=$1 dest=$2
+  if [[ -f "$SCRIPT_DIR/$rel" ]]; then
+    cp "$SCRIPT_DIR/$rel" "$dest"
+    echo "Lokal: $SCRIPT_DIR/$rel" >>"$LOGFILE"
+    return 0
+  fi
+  echo "Download: $ZBX_REPO_RAW/$rel" >>"$LOGFILE"
+  curl -fsSL --max-time 30 -o "$dest" "$ZBX_REPO_RAW/$rel" 2>>"$LOGFILE"
 }
 
 # ---------- Zabbix-API -------------------------------------------------------
@@ -319,6 +345,21 @@ ask_questions() {
     ok "Neuer 256-Bit-PSK erzeugt."
   fi
 
+  header "Zusatzüberwachung"
+  echo "  apt-Updates: zählt alle 6 h die aktualisierbaren Pakete (sudo-Regel + UserParameter"
+  echo "  auf dem Host, Template 'Linux updates by Zabbix agent [active]' im Frontend)."
+  if ask_yn "apt-Updates-Überwachung einrichten?" j; then
+    APT_UPDATES=1
+    # Aktiv und Aktiv+Passiv -> aktive Variante (apt update dauert, kein Poller blockiert)
+    if [[ $MODE == passive ]]; then
+      APT_TPL_NAME="Linux updates by Zabbix agent"
+      APT_TPL_FILE="template_apt_updates_passive.yaml"
+    else
+      APT_TPL_NAME="Linux updates by Zabbix agent active"
+      APT_TPL_FILE="template_apt_updates_active.yaml"
+    fi
+  fi
+
   if [[ $MODE != active ]] && command -v ufw >/dev/null 2>&1 &&
     ufw status 2>/dev/null | grep -q "Status: active"; then
     header "Firewall"
@@ -420,6 +461,35 @@ api_setup() {
     done
   fi
 
+  # --- apt-Updates-Template ---
+  if ((APT_UPDATES)); then
+    api template.get "$(jq -nc --arg n "$APT_TPL_NAME" '{output:["templateid"], filter:{host:[$n]}}')"
+    APT_TPL_ID=$(jq -r '.[0].templateid // empty' <<<"$API_RESULT")
+    if [[ -n $APT_TPL_ID ]]; then
+      ok "Template '$APT_TPL_NAME' gefunden."
+    elif ask_yn "Template '$APT_TPL_NAME' fehlt im Frontend – aus dem Repo importieren?" j; then
+      APT_TPL_IMPORT=1
+    else
+      warn "Template wird nicht verknüpft – Host-Seite wird trotzdem eingerichtet."
+    fi
+
+    if [[ -n $HOST_ID ]]; then
+      # Bereits verknüpft? Andere Variante verknüpft (apt update liefe doppelt)?
+      api template.get "$(jq -nc --arg id "$HOST_ID" \
+        '{output:["host"], hostids:[$id],
+          filter:{host:["Linux updates by Zabbix agent","Linux updates by Zabbix agent active"]}}')"
+      local linked
+      linked=$(jq -r '.[].host' <<<"$API_RESULT")
+      if grep -qxF "$APT_TPL_NAME" <<<"$linked"; then
+        APT_TPL_LINKED=1
+        ok "Template '$APT_TPL_NAME' ist am Host bereits verknüpft."
+      elif [[ -n $linked ]]; then
+        warn "Am Host ist bereits '$linked' verknüpft – bitte im Frontend entfernen,"
+        warn "sonst läuft 'apt update' doppelt."
+      fi
+    fi
+  fi
+
   # --- Proxy ---
   MONITORED_BY=0
   if [[ $VIA == proxy ]]; then
@@ -454,6 +524,17 @@ show_summary() {
   printf '  %-20s %s\n' "PSK-Identity:" "$PSK_IDENTITY $([[ $PSK_REUSED == 1 ]] && echo '(bestehend)' || echo '(neu)')"
   ((REMOVE_OTHER)) && printf '  %-20s %s\n' "Entfernen:" "$OTHER_PKG"
   ((OPEN_UFW)) && printf '  %-20s %s\n' "Firewall:" "ufw 10050/tcp für $CONF_SERVER"
+  if ((APT_UPDATES)); then
+    local apt_txt="sudo-Regel + UserParameter"
+    if ((USE_API)); then
+      if ((APT_TPL_LINKED)); then apt_txt+=", Template schon verknüpft"
+      elif ((APT_TPL_IMPORT)); then apt_txt+=", Template importieren + verknüpfen"
+      elif [[ -n $APT_TPL_ID ]]; then apt_txt+=", Template verknüpfen"
+      fi
+    fi
+    printf '  %-20s %s\n' "apt-Updates:" "$apt_txt"
+    printf '  %-20s %s\n' "" "($APT_TPL_NAME)"
+  fi
   if ((USE_API)); then
     if [[ -n $HOST_ID ]]; then
       printf '  %-20s %s\n' "API:" "bestehenden Host aktualisieren (ID $HOST_ID)"
@@ -556,6 +637,11 @@ configure_agent() {
     fi
     [[ -n $CONF_SERVER_ACTIVE ]] && echo "ServerActive=$CONF_SERVER_ACTIVE"
     echo "Hostname=$HOST_NAME"
+    # UserParameter-Verzeichnis einbinden, falls die Paket-Konfig das nicht schon tut
+    if ((APT_UPDATES)) &&
+      ! grep -qE "^[[:space:]]*Include[[:space:]]*=[[:space:]]*${APT_UP_DIR}/?(\*\.conf)?[[:space:]]*$" "$f"; then
+      echo "Include=${APT_UP_DIR}/*.conf"
+    fi
     [[ $MODE != passive ]] && echo "TLSConnect=psk"   # Agent -> Server (aktiv)
     [[ $MODE != active ]] && echo "TLSAccept=psk"     # Server -> Agent (passiv)
     echo "TLSPSKIdentity=$PSK_IDENTITY"
@@ -574,6 +660,69 @@ configure_agent() {
     fi
   fi
   ok "Konfiguration geschrieben ($f, Backup: $(basename "$CONF_BACKUP"))."
+}
+
+install_apt_updates() {
+  ((APT_UPDATES)) || return 0
+  info "Richte apt-Updates-Überwachung ein ..."
+
+  # sudo wird für die Regel gebraucht (fehlt auf Minimal-Installationen)
+  if ! pkg_installed sudo; then
+    run env DEBIAN_FRONTEND=noninteractive apt-get install -y sudo
+  fi
+
+  # sudo-Regel: nur genau "apt-get update -qq" als root, vorher mit visudo prüfen
+  local tmp
+  tmp=$(mktemp)
+  printf '# Verwaltet von zabbix-agent-install.sh\n%s\n' "$APT_SUDO_RULE" >"$tmp"
+  if visudo -cqf "$tmp" >>"$LOGFILE" 2>&1; then
+    install -m 0440 -o root -g root "$tmp" "$APT_SUDOERS"
+    ok "sudo-Regel: $APT_SUDOERS"
+  else
+    rm -f "$tmp"
+    warn "sudo-Regel ist ungültig – apt-Updates werden nicht eingerichtet."
+    APT_UPDATES=0
+    return 0
+  fi
+  rm -f "$tmp"
+
+  # UserParameter aus dem Repo (lokal oder GitHub), notfalls eingebaute Kopie
+  install -d -m 0755 "$APT_UP_DIR"
+  tmp=$(mktemp)
+  if ! fetch_repo_file "$APT_DIR/$APT_UP_FILE" "$tmp" ||
+    ! grep -q "^UserParameter=${APT_KEY}," "$tmp"; then
+    warn "UserParameter nicht aus dem Repo ladbar – nutze eingebaute Kopie."
+    cat >"$tmp" <<'EOF'
+# Anzahl der Pakete, die nach "apt update" aktualisiert werden können
+# (für zabbix_agentd.d/ und zabbix_agent2.d/ gleichermaßen)
+UserParameter=apt.updates.count,sudo -n /usr/bin/apt-get update -qq >/dev/null 2>&1; LC_ALL=C /usr/bin/apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null | grep -c '^Inst [^ ]* \[' || true
+EOF
+  fi
+  install -m 0644 -o root -g root "$tmp" "$APT_UP_DIR/$APT_UP_FILE"
+  rm -f "$tmp"
+  ok "UserParameter: $APT_UP_DIR/$APT_UP_FILE"
+
+  # Darf der Benutzer zabbix den Befehl ausführen? (-l prüft nur, führt nichts aus)
+  if runuser -u zabbix -- sudo -n -l /usr/bin/apt-get update -qq >/dev/null 2>&1; then
+    ok "sudo-Regel greift für Benutzer zabbix."
+  else
+    warn "sudo-Regel greift nicht für Benutzer zabbix – 'sudo -l -U zabbix' prüfen."
+  fi
+}
+
+# Nach dem Start: Key einmal lokal als Benutzer zabbix abfragen
+test_apt_updates() {
+  ((APT_UPDATES)) || return 0
+  info "Teste $APT_KEY (apt update kann bis zu 2 Minuten dauern) ..."
+  local out val
+  out=$(timeout 180 runuser -u zabbix -- "$AGENT_BIN" -c "$AGENT_CONF" -t "$APT_KEY" 2>&1 || true)
+  echo "$out" >>"$LOGFILE"
+  val=$(grep -oE '\[[a-z]\|[^]]*\]' <<<"$out" | tail -n1 | sed -E 's/^\[[a-z]\|//; s/\]$//' || true)
+  if [[ $val =~ ^[0-9]+$ ]]; then
+    ok "$APT_KEY = $val aktualisierbare Pakete."
+  else
+    warn "Test von $APT_KEY ohne Ergebnis: ${out:0:200}"
+  fi
 }
 
 open_firewall() {
@@ -617,9 +766,41 @@ check_ports() {
   done < <(split_targets "$CONF_SERVER_ACTIVE")
 }
 
+# apt-Updates-Template aus dem Repo per configuration.import ins Frontend laden
+import_apt_template() {
+  local tmp params
+  tmp=$(mktemp)
+  if ! fetch_repo_file "$APT_DIR/$APT_TPL_FILE" "$tmp"; then
+    rm -f "$tmp"
+    warn "Template-Datei $APT_TPL_FILE nicht ladbar – bitte manuell importieren."
+    return 1
+  fi
+  params=$(jq -nc --rawfile src "$tmp" \
+    '{format:"yaml", source:$src,
+      rules:{template_groups:{createMissing:true},
+             templates:{createMissing:true, updateExisting:false},
+             items:{createMissing:true, updateExisting:false},
+             triggers:{createMissing:true, updateExisting:false}}}')
+  rm -f "$tmp"
+  if ! api_call configuration.import "$params"; then
+    warn "Template-Import fehlgeschlagen: $API_ERR"
+    return 1
+  fi
+  api template.get "$(jq -nc --arg n "$APT_TPL_NAME" '{output:["templateid"], filter:{host:[$n]}}')"
+  APT_TPL_ID=$(jq -r '.[0].templateid // empty' <<<"$API_RESULT")
+  [[ -n $APT_TPL_ID ]] || { warn "Template nach dem Import nicht gefunden."; return 1; }
+  ok "Template '$APT_TPL_NAME' importiert."
+}
+
 register_host() {
   ((USE_API)) || return 0
   info "Registriere Host im Frontend ..."
+
+  # apt-Updates-Template nur mitnehmen, wenn die Host-Seite eingerichtet ist
+  if ((APT_UPDATES && APT_TPL_IMPORT)) && [[ -z $APT_TPL_ID ]]; then
+    import_apt_template || true
+  fi
+  ((APT_UPDATES)) || APT_TPL_ID=""
 
   if ((GROUP_CREATE)); then
     if ! api_call hostgroup.create "$(jq -nc --arg n "$GROUP_NAME" '{name:$n}')"; then
@@ -656,16 +837,25 @@ register_host() {
         [[ $(jq 'length' <<<"$API_RESULT") -gt 0 ]]; then
         warn "Der bestehende Host hat noch ein Agent-Interface – bei reinen Aktiv-Checks kannst du es im Frontend entfernen."
       fi
+      # Template ergänzen, ohne bestehende Verknüpfungen anzufassen
+      if [[ -n $APT_TPL_ID ]] && ((!APT_TPL_LINKED)); then
+        if api_call host.massadd "$(jq -nc --arg h "$HOST_ID" --arg t "$APT_TPL_ID" \
+          '{hosts:[{hostid:$h}], templates:[{templateid:$t}]}')"; then
+          ok "Template '$APT_TPL_NAME' verknüpft."
+        else
+          warn "Template konnte nicht verknüpft werden: $API_ERR"
+        fi
+      fi
     else
       warn "host.update fehlgeschlagen: $API_ERR"
     fi
   else
     params=$(jq -nc --arg h "$HOST_NAME" --arg g "$GROUP_ID" --arg ip "$HOST_IP" \
-      --arg tpl "$TEMPLATE_ID" --arg idn "$PSK_IDENTITY" --arg psk "$PSK_KEY" \
+      --arg tpl "$TEMPLATE_ID" --arg apt "$APT_TPL_ID" --arg idn "$PSK_IDENTITY" --arg psk "$PSK_KEY" \
       --argjson mb "$MONITORED_BY" --argjson px "$proxy_part" \
       --argjson tc "$tls_connect" --argjson ta "$tls_accept" \
       '{host:$h, groups:[{groupid:$g}],
-        templates:(if $tpl == "" then [] else [{templateid:$tpl}] end),
+        templates:([$tpl, $apt] | map(select(. != "")) | unique | map({templateid:.})),
         monitored_by:$mb, tls_connect:$tc, tls_accept:$ta,
         tls_psk_identity:$idn, tls_psk:$psk}
        + (if $ip == "" then {}
@@ -674,6 +864,7 @@ register_host() {
     if api_call host.create "$params"; then
       HOST_ID=$(jq -r '.hostids[0]' <<<"$API_RESULT")
       ok "Host '$HOST_NAME' angelegt (ID $HOST_ID)."
+      [[ -n $APT_TPL_ID ]] && ok "Template '$APT_TPL_NAME' verknüpft."
       API_DONE=1
     else
       warn "host.create fehlgeschlagen: $API_ERR"
@@ -701,6 +892,14 @@ final_report() {
       both)    echo "                   (Verbindungen zum und vom Host: PSK)" ;;
     esac
   fi
+  if ((APT_UPDATES)); then
+    printf '  %-16s %s\n' "apt-Updates:" "$APT_UP_DIR/$APT_UP_FILE, $APT_SUDOERS"
+    if ((API_DONE)) && [[ -n $APT_TPL_ID ]]; then
+      printf '  %-16s %s\n' "" "Template '$APT_TPL_NAME' verknüpft"
+    else
+      printf '  %-16s %s\n' "" "Template '$APT_TPL_NAME' MANUELL verknüpfen"
+    fi
+  fi
   printf '  %-16s %s\n' "Install-Log:" "$LOGFILE"
   printf '%s%s%s\n\n' "$C_G" "$line" "$C_0"
 }
@@ -721,10 +920,12 @@ main() {
   install_repo
   install_agent
   write_psk
+  install_apt_updates
   configure_agent
   open_firewall
   start_agent
   check_ports
+  test_apt_updates
   register_host
   final_report
 }
