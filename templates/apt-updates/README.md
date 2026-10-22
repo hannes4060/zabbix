@@ -2,6 +2,14 @@
 
 Der Agent führt alle 6 Stunden `apt-get update` aus und zählt danach, wie viele installierte Pakete aktualisiert werden können (dieselbe Zahl wie `apt list --upgradable`). Es wird nichts installiert. Funktioniert mit Agent 1 und Agent 2 auf Debian/Ubuntu.
 
+## Automatisch per Install-Script
+
+[`zabbix-agent-install.sh`](../../zabbix-agent-install.sh) erledigt alle
+folgenden Schritte selbst: Frage *„apt-Updates-Überwachung einrichten?“* mit
+Ja beantworten. Mit API-Registrierung wird das passende Template außerdem
+importiert (falls nötig) und am Host verknüpft. Die manuelle Anleitung unten
+ist nur nötig, wenn du das Script nicht verwendest.
+
 ## 1. sudo-Regel anlegen
 
 Der Agent läuft als Benutzer `zabbix`, `apt update` braucht aber root. Die Regel erlaubt nur genau diesen einen Befehl:

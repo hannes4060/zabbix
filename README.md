@@ -58,17 +58,37 @@ FQDN sowie vorhandene Werte aus einer bestehenden Agent-Konfiguration.
   (mehrere mit `,`, HA-Knoten mit `;`)
 - Hostname, bei Passiv-Checks die Interface-IP
 - PSK-Identity (PSK wird erzeugt oder ein vorhandener weiterverwendet)
+- Optional [apt-Updates-Überwachung](templates/apt-updates/README.md) (Standard: ja)
 - Optional API-Registrierung: Frontend-URL, Token, Hostgruppe, Template, Proxy
 
 **Führt aus (nach Bestätigung):**
 
 1. Zabbix-Repository einrichten, Agent installieren
 2. PSK nach `/etc/zabbix/zabbix_agent.psk` schreiben (`root:zabbix`, 640)
-3. Agent-Konfiguration sichern und einen verwalteten Block schreiben
+3. Optional apt-Updates: sudo-Regel `/etc/sudoers.d/zabbix-apt` (mit `visudo`
+   geprüft) und UserParameter ins `zabbix_agent2.d`/`zabbix_agentd.d` legen
+4. Agent-Konfiguration sichern und einen verwalteten Block schreiben
    (bei erneutem Lauf wird nur dieser Block ersetzt)
-4. Konfiguration testen, Dienst starten, Erreichbarkeit von Port 10051 prüfen
-5. Optional `ufw`-Freigabe für Port 10050 (nur Passiv)
-6. Optional Host per API anlegen bzw. PSK/Proxy eines bestehenden Hosts aktualisieren
+5. Konfiguration testen, Dienst starten, Erreichbarkeit von Port 10051 prüfen,
+   ggf. `apt.updates.count` einmal als Benutzer `zabbix` abfragen
+6. Optional `ufw`-Freigabe für Port 10050 (nur Passiv)
+7. Optional Host per API anlegen bzw. PSK/Proxy eines bestehenden Hosts
+   aktualisieren – inklusive apt-Updates-Template (fehlt es im Frontend, wird
+   es per `configuration.import` aus dem Repo importiert)
+
+### apt-Updates-Überwachung
+
+Die Dateien kommen aus `templates/apt-updates/`: liegt das Script in einem
+`git clone`, werden die lokalen Dateien genutzt, sonst lädt das Script sie von
+GitHub (`ZBX_REPO_RAW` überschreibt die Quelle, z. B. für einen eigenen Fork).
+
+| Modus | Verknüpftes Template |
+|---|---|
+| Aktiv, Aktiv + Passiv | *Linux updates by Zabbix agent active* |
+| Passiv | *Linux updates by Zabbix agent* |
+
+Ist am bestehenden Host bereits die andere Variante verknüpft, warnt das
+Script – sonst liefe `apt update` doppelt.
 
 ### Modi
 
@@ -82,8 +102,12 @@ FQDN sowie vorhandene Werte aus einer bestehenden Agent-Konfiguration.
 
 Token im Frontend unter *Benutzereinstellungen → API-Tokens* erzeugen.
 Benötigte API-Methoden: `apiinfo.version`, `host.get`, `host.create`,
-`host.update`, `hostgroup.get`, `hostgroup.create`, `template.get`,
-`proxy.get`, `hostinterface.get`.
+`host.update`, `host.massadd`, `hostgroup.get`, `hostgroup.create`,
+`template.get`, `proxy.get`, `hostinterface.get`, `configuration.import`.
+
+`configuration.import` wird nur gebraucht, wenn das apt-Updates-Template noch
+nicht im Frontend existiert (Import eines Templates braucht Super-admin-Rechte
+bzw. Schreibrechte auf die Gruppe *Templates/Applications*).
 
 Empfohlen: eigener Service-Benutzer mit einer Rolle, deren API-Zugriff auf
 diese Methoden beschränkt ist (Allow list).
