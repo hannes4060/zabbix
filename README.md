@@ -185,6 +185,13 @@ Benötigte API-Methoden: `apiinfo.version`, `proxy.get`, `proxy.create`,
 
 Installationsausgaben landen in `/var/log/zabbix-proxy-install.log` (Rechte 600).
 
+## Template: Linux-Updates (apt)
+
+Zabbix-Template, das auf Debian/Ubuntu-Hosts regelmäßig `apt update` ausführt und
+die Anzahl aktualisierbarer Pakete meldet. Je eine Variante für passive und aktive
+Checks, inklusive UserParameter. Installation und sudo-Regel:
+[templates/apt-updates/README.md](templates/apt-updates/README.md).
+
 ## Lizenz
 
 [MIT](LICENSE) © hannes4060
