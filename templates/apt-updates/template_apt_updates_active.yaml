@@ -1,0 +1,41 @@
+zabbix_export:
+  version: '8.0'
+  template_groups:
+    - uuid: c514ff052f5a4d11aeafe383fe0042ca
+      name: Templates/Applications
+  templates:
+    - uuid: 17f53c76f3724c978ff8beb3a7ca0686
+      template: 'Linux updates by Zabbix agent active'
+      name: 'Linux updates by Zabbix agent active'
+      description: |
+        Führt auf Debian/Ubuntu-Hosts regelmäßig "apt update" aus und meldet,
+        wie viele Pakete aktualisiert werden können (aktive Checks).
+        Benötigt userparameter_apt_updates.conf und eine sudo-Regel auf dem Host (siehe ANLEITUNG.md).
+      groups:
+        - name: Templates/Applications
+      items:
+        - uuid: 73cfcfa597ee4f1d93bd0d0d0628f71d
+          name: 'apt: aktualisierbare Pakete'
+          type: ZABBIX_ACTIVE
+          key: apt.updates.count
+          delay: '{$APT.UPDATES.INTERVAL}'
+          timeout: 3m
+          description: 'Anzahl der Pakete, die nach apt update aktualisiert werden können.'
+          tags:
+            - tag: component
+              value: updates
+          triggers:
+            - uuid: 2913af671d5e4c9487a1a49757ed8dad
+              expression: 'last(/Linux updates by Zabbix agent active/apt.updates.count)>={$APT.UPDATES.MIN}'
+              name: '{ITEM.LASTVALUE1} Paket-Updates verfügbar'
+              priority: INFO
+              tags:
+                - tag: scope
+                  value: notice
+      macros:
+        - macro: '{$APT.UPDATES.INTERVAL}'
+          value: 6h
+          description: 'Wie oft apt update ausgeführt und gezählt wird.'
+        - macro: '{$APT.UPDATES.MIN}'
+          value: '1'
+          description: 'Ab so vielen aktualisierbaren Paketen löst der Trigger aus.'
