@@ -75,6 +75,9 @@ FQDN sowie vorhandene Werte aus einer bestehenden Agent-Konfiguration.
 7. Optional Host per API anlegen bzw. PSK/Proxy eines bestehenden Hosts
    aktualisieren – inklusive apt-Updates-Template (fehlt es im Frontend, wird
    es per `configuration.import` aus dem Repo importiert)
+8. Optional das Zabbix-Script *„apt-Updates prüfen“* fürs Host-Menü anlegen
+   (einmalig; Helfer `/usr/local/bin/zabbix-apt-check`, freigegeben per
+   `AllowKey=system.run[...]` nur für genau diesen Befehl)
 
 ### apt-Updates-Überwachung
 
@@ -103,7 +106,8 @@ Script – sonst liefe `apt update` doppelt.
 Token im Frontend unter *Benutzereinstellungen → API-Tokens* erzeugen.
 Benötigte API-Methoden: `apiinfo.version`, `host.get`, `host.create`,
 `host.update`, `host.massadd`, `hostgroup.get`, `hostgroup.create`,
-`template.get`, `proxy.get`, `hostinterface.get`, `configuration.import`.
+`template.get`, `proxy.get`, `hostinterface.get`, `configuration.import`,
+`script.get`, `script.create`.
 
 `configuration.import` wird nur gebraucht, wenn das apt-Updates-Template noch
 nicht im Frontend existiert (Import eines Templates braucht Super-admin-Rechte

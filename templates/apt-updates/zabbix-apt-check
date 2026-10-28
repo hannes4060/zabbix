@@ -1,0 +1,29 @@
+#!/bin/sh
+# zabbix-apt-check – für das Zabbix-Script "apt-Updates prüfen"
+#
+# Aktualisiert die Paketlisten (über dieselbe sudo-Regel wie der UserParameter)
+# und listet die aktualisierbaren Pakete auf. Installiert nichts.
+# Wird vom Agent als Benutzer zabbix per system.run aufgerufen; freigeschaltet mit
+#   AllowKey=system.run[/usr/local/bin/zabbix-apt-check]
+
+if ! sudo -n /usr/bin/apt-get update -qq >/dev/null 2>&1; then
+  echo "WARNUNG: apt-get update fehlgeschlagen (sudo-Regel /etc/sudoers.d/zabbix-apt?)"
+  echo "Die Liste basiert auf dem letzten Stand der Paketlisten."
+  echo
+fi
+
+# Gleiche Zählung wie der UserParameter apt.updates.count
+list=$(LC_ALL=C /usr/bin/apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null |
+  sed -n 's/^Inst \([^ ]*\) \[\([^]]*\)\] (\([^ ]*\).*/\1  \2 -> \3/p')
+count=$(printf '%s' "$list" | grep -c .)
+
+# Zum Vergleich: apt list --upgradable zählt auch zurückgehaltene/phased Updates
+all=$(LC_ALL=C apt list --upgradable 2>/dev/null | grep -c '\[upgradable from')
+
+echo "$count aktualisierbare Pakete"
+if [ "$all" -gt "$count" ]; then
+  echo "($((all - count)) weitere werden von apt zurückgehalten, z. B. phased updates)"
+fi
+echo
+[ -n "$list" ] && printf '%s\n' "$list"
+exit 0

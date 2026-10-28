@@ -54,6 +54,11 @@ APT_UP_FILE="userparameter_apt_updates.conf"
 APT_KEY="apt.updates.count"
 APT_UPDATES=0 APT_TPL_NAME="" APT_TPL_FILE="" APT_TPL_ID="" APT_TPL_IMPORT=0 APT_TPL_LINKED=0
 APT_UP_DIR=""
+APT_CHECK_FILE="zabbix-apt-check"
+APT_CHECK_BIN="/usr/local/bin/zabbix-apt-check"
+APT_CHECK_OK=0          # Helfer auf dem Host installiert
+APT_SCRIPT_NAME="apt-Updates prüfen"
+APT_SCRIPT_ID="" APT_SCRIPT_CREATE=0
 
 # ---------- Ausgabe ----------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -490,6 +495,20 @@ api_setup() {
     fi
   fi
 
+  # --- Zabbix-Script "apt-Updates prüfen" (einmalig global) ---
+  if ((APT_UPDATES)); then
+    if api_call script.get "$(jq -nc --arg n "$APT_SCRIPT_NAME" '{output:["scriptid"], filter:{name:[$n]}}')"; then
+      APT_SCRIPT_ID=$(jq -r '.[0].scriptid // empty' <<<"$API_RESULT")
+      if [[ -n $APT_SCRIPT_ID ]]; then
+        ok "Zabbix-Script '$APT_SCRIPT_NAME' vorhanden."
+      elif ask_yn "Zabbix-Script '$APT_SCRIPT_NAME' fürs Host-Menü anlegen?" j; then
+        APT_SCRIPT_CREATE=1
+      fi
+    else
+      warn "script.get nicht erlaubt ($API_ERR) – Zabbix-Script wird nicht angelegt."
+    fi
+  fi
+
   # --- Proxy ---
   MONITORED_BY=0
   if [[ $VIA == proxy ]]; then
@@ -531,6 +550,7 @@ show_summary() {
       elif ((APT_TPL_IMPORT)); then apt_txt+=", Template importieren + verknüpfen"
       elif [[ -n $APT_TPL_ID ]]; then apt_txt+=", Template verknüpfen"
       fi
+      ((APT_SCRIPT_CREATE)) && apt_txt+=", Zabbix-Script anlegen"
     fi
     printf '  %-20s %s\n' "apt-Updates:" "$apt_txt"
     printf '  %-20s %s\n' "" "($APT_TPL_NAME)"
@@ -642,6 +662,8 @@ configure_agent() {
       ! grep -qE "^[[:space:]]*Include[[:space:]]*=[[:space:]]*${APT_UP_DIR}/?(\*\.conf)?[[:space:]]*$" "$f"; then
       echo "Include=${APT_UP_DIR}/*.conf"
     fi
+    # Nur genau den Helfer für das Zabbix-Script "apt-Updates prüfen" freigeben
+    ((APT_CHECK_OK)) && echo "AllowKey=system.run[${APT_CHECK_BIN}]"
     [[ $MODE != passive ]] && echo "TLSConnect=psk"   # Agent -> Server (aktiv)
     [[ $MODE != active ]] && echo "TLSAccept=psk"     # Server -> Agent (passiv)
     echo "TLSPSKIdentity=$PSK_IDENTITY"
@@ -701,6 +723,21 @@ EOF
   install -m 0644 -o root -g root "$tmp" "$APT_UP_DIR/$APT_UP_FILE"
   rm -f "$tmp"
   ok "UserParameter: $APT_UP_DIR/$APT_UP_FILE"
+
+  # Helfer für das Zabbix-Script "apt-Updates prüfen" (Sofortabfrage im Host-Menü)
+  tmp=$(mktemp)
+  if fetch_repo_file "$APT_DIR/$APT_CHECK_FILE" "$tmp" && head -n1 "$tmp" | grep -q '^#!/bin/sh'; then
+    install -m 0755 -o root -g root "$tmp" "$APT_CHECK_BIN"
+    APT_CHECK_OK=1
+    ok "Sofortabfrage: $APT_CHECK_BIN"
+  else
+    warn "$APT_CHECK_FILE nicht ladbar – Sofortabfrage im Host-Menü wird nicht eingerichtet."
+  fi
+  rm -f "$tmp"
+  if ((APT_CHECK_OK)) && grep -qE '^[[:space:]]*DenyKey[[:space:]]*=[[:space:]]*system\.run' "$AGENT_CONF"; then
+    warn "In $AGENT_CONF steht ein aktives DenyKey=system.run[...] vor dem verwalteten Block –"
+    warn "dann greift das AllowKey für $APT_CHECK_BIN nicht. Bitte prüfen."
+  fi
 
   # Darf der Benutzer zabbix den Befehl ausführen? (-l prüft nur, führt nichts aus)
   if runuser -u zabbix -- sudo -n -l /usr/bin/apt-get update -qq >/dev/null 2>&1; then
@@ -801,6 +838,18 @@ register_host() {
     import_apt_template || true
   fi
   ((APT_UPDATES)) || APT_TPL_ID=""
+
+  # Globales Script fürs Host-Menü (Typ Script, auf dem Agent, manuelle Host-Aktion)
+  if ((APT_UPDATES && APT_SCRIPT_CREATE)); then
+    if api_call script.create "$(jq -nc --arg n "$APT_SCRIPT_NAME" --arg c "$APT_CHECK_BIN" \
+      '{name:$n, type:0, scope:2, execute_on:0, command:$c, timeout:"60s",
+        groupid:"0", host_access:2,
+        description:"apt update ausführen und aktualisierbare Pakete auflisten (zabbix-agent-install.sh)"}')"; then
+      ok "Zabbix-Script '$APT_SCRIPT_NAME' angelegt."
+    else
+      warn "Zabbix-Script konnte nicht angelegt werden: $API_ERR"
+    fi
+  fi
 
   if ((GROUP_CREATE)); then
     if ! api_call hostgroup.create "$(jq -nc --arg n "$GROUP_NAME" '{name:$n}')"; then
