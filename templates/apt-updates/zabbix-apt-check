@@ -1,16 +1,29 @@
 #!/bin/sh
 # zabbix-apt-check – für das Zabbix-Script "apt-Updates prüfen"
 #
-# Aktualisiert die Paketlisten (über dieselbe sudo-Regel wie der UserParameter)
-# und listet die aktualisierbaren Pakete auf. Installiert nichts.
+# Listet die aktualisierbaren Pakete aus den vorhandenen Paketlisten auf und
+# endet sofort (der Agent bricht Remote-Befehle nach seinem Timeout ab, bei
+# Agent 2 standardmäßig 3 s – "apt update" dauert meist länger).
+# Sind die Paketlisten älter als MAX_AGE, wird "apt-get update" über dieselbe
+# sudo-Regel wie der UserParameter im Hintergrund angestoßen; ein erneuter
+# Aufruf nach etwa einer Minute zeigt dann den aktuellen Stand.
+# Installiert nichts.
+#
 # Wird vom Agent als Benutzer zabbix per system.run aufgerufen; freigeschaltet mit
-#   AllowKey=system.run[/usr/local/bin/zabbix-apt-check]
+#   AllowKey=system.run[/usr/local/bin/zabbix-apt-check,*]
 
-if ! sudo -n /usr/bin/apt-get update -qq >/dev/null 2>&1; then
-  echo "WARNUNG: apt-get update fehlgeschlagen (sudo-Regel /etc/sudoers.d/zabbix-apt?)"
-  echo "Die Liste basiert auf dem letzten Stand der Paketlisten."
-  echo
-fi
+MAX_AGE=900   # Sekunden (15 min)
+
+# Stand der Paketlisten: jüngster Zeitstempel aus pkgcache.bin (bei jedem
+# "apt update" neu erzeugt), dem Erfolgsstempel von apt-daily und dem
+# Listenverzeichnis (falls pkgcache.bin z. B. per docker-clean gelöscht wird)
+stamp=0
+for f in /var/cache/apt/pkgcache.bin /var/lib/apt/periodic/update-success-stamp /var/lib/apt/lists; do
+  t=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+  [ "$t" -gt "$stamp" ] && stamp=$t
+done
+now=$(date +%s)
+age=$((now - stamp))
 
 # Gleiche Zählung wie der UserParameter apt.updates.count
 list=$(LC_ALL=C /usr/bin/apt-get -s -o Debug::NoLocking=true dist-upgrade 2>/dev/null |
@@ -24,6 +37,24 @@ echo "$count aktualisierbare Pakete"
 if [ "$all" -gt "$count" ]; then
   echo "($((all - count)) weitere werden von apt zurückgehalten, z. B. phased updates)"
 fi
+
+if [ "$stamp" -gt 0 ]; then
+  if [ "$age" -lt 7200 ]; then ago="$((age / 60)) min"
+  elif [ "$age" -lt 172800 ]; then ago="$((age / 3600)) h"
+  else ago="$((age / 86400)) Tagen"; fi
+  echo "Paketlisten-Stand: $(date -d "@$stamp" '+%d.%m.%Y %H:%M') (vor $ago)"
+fi
+
+if [ "$age" -gt "$MAX_AGE" ]; then
+  # Losgelöst vom Agent starten, damit er nicht auf das Ende wartet
+  if command -v setsid >/dev/null 2>&1; then
+    setsid sudo -n /usr/bin/apt-get update -qq </dev/null >/dev/null 2>&1 &
+  else
+    nohup sudo -n /usr/bin/apt-get update -qq </dev/null >/dev/null 2>&1 &
+  fi
+  echo "-> apt update läuft im Hintergrund, in ca. 1 min erneut ausführen."
+fi
+
 echo
 [ -n "$list" ] && printf '%s\n' "$list"
 exit 0

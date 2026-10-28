@@ -65,10 +65,16 @@ Das Item hat ein eigenes Timeout von 3 Minuten, weil `apt update` länger als da
 ## 4. Sofortabfrage im Host-Menü (optional)
 
 Mit dem Zabbix-Script **„apt-Updates prüfen“** lässt sich die Liste jederzeit
-über das Host-Menü abrufen (Klick auf den Hostnamen → *Scripts*). Es führt
-`apt update` aus und zeigt die aktualisierbaren Pakete mit alter und neuer
-Version an. Pakete, die apt zurückhält (z. B. Ubuntu *phased updates*), werden
-als Hinweis mitgezählt.
+über das Host-Menü abrufen (Klick auf den Hostnamen → *Scripts*). Es zeigt
+sofort die aktualisierbaren Pakete mit alter und neuer Version sowie den Stand
+der Paketlisten. Pakete, die apt zurückhält (z. B. Ubuntu *phased updates*),
+werden als Hinweis mitgezählt.
+
+Sind die Paketlisten älter als 15 Minuten, stößt der Helfer `apt update` im
+Hintergrund an; ein erneuter Aufruf nach etwa einer Minute zeigt den aktuellen
+Stand. Synchron geht das nicht, weil der Agent Remote-Befehle nach seinem
+`Timeout` abbricht (Agent 2: standardmäßig 3 s), `apt update` aber meist
+länger dauert.
 
 Das Install-Script richtet das automatisch ein. Von Hand:
 
@@ -77,7 +83,7 @@ Das Install-Script richtet das automatisch ein. Von Hand:
 install -m 0755 zabbix-apt-check /usr/local/bin/
 
 # nur genau diesen Befehl für Remote-Ausführung freigeben
-echo 'AllowKey=system.run[/usr/local/bin/zabbix-apt-check]' \
+echo 'AllowKey=system.run[/usr/local/bin/zabbix-apt-check,*]' \
   > /etc/zabbix/zabbix_agent2.d/apt-check.conf      # Agent 1: zabbix_agentd.d/
 systemctl restart zabbix-agent2                     # Agent 1: zabbix-agent
 ```
