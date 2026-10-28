@@ -61,3 +61,45 @@ Ergebnis: Item **„apt: aktualisierbare Pakete“** und Trigger **„Paket-Upda
 | `{$APT.UPDATES.MIN}` | 1 | Ab so vielen Paketen löst der Trigger aus |
 
 Das Item hat ein eigenes Timeout von 3 Minuten, weil `apt update` länger als das Standard-Timeout des Agents dauern kann.
+
+## 4. Sofortabfrage im Host-Menü (optional)
+
+Mit dem Zabbix-Script **„apt-Updates prüfen“** lässt sich die Liste jederzeit
+über das Host-Menü abrufen (Klick auf den Hostnamen → *Scripts*). Es führt
+`apt update` aus und zeigt die aktualisierbaren Pakete mit alter und neuer
+Version an. Pakete, die apt zurückhält (z. B. Ubuntu *phased updates*), werden
+als Hinweis mitgezählt.
+
+Das Install-Script richtet das automatisch ein. Von Hand:
+
+```sh
+# Helfer installieren
+install -m 0755 zabbix-apt-check /usr/local/bin/
+
+# nur genau diesen Befehl für Remote-Ausführung freigeben
+echo 'AllowKey=system.run[/usr/local/bin/zabbix-apt-check]' \
+  > /etc/zabbix/zabbix_agent2.d/apt-check.conf      # Agent 1: zabbix_agentd.d/
+systemctl restart zabbix-agent2                     # Agent 1: zabbix-agent
+```
+
+Einmalig im Frontend unter *Alerts → Scripts → Create script*:
+
+| Feld | Wert |
+|---|---|
+| Name | `apt-Updates prüfen` |
+| Scope | Manual host action |
+| Type | Script |
+| Execute on | Zabbix agent |
+| Commands | `/usr/local/bin/zabbix-apt-check` |
+| Timeout | 60s |
+| Host group | All (oder die Gruppe der Linux-Hosts) |
+
+Hinweise:
+
+- Bei reinen **Aktiv**-Agents holt sich der Agent den Befehl bei seiner
+  nächsten Verbindung zum Server ab. Das wird ab Agent 7.0 unterstützt, die
+  Antwort kann einige Sekunden dauern.
+- Die Sofortabfrage zeigt nur die Liste an und ändert das Item nicht. Das Item
+  aktualisiert sich im nächsten Intervall (`{$APT.UPDATES.INTERVAL}`).
+- Steht in der Agent-Konfiguration ein aktives `DenyKey=system.run[*]` vor dem
+  `AllowKey`, greift die Freigabe nicht. Die erste passende Regel gewinnt.
