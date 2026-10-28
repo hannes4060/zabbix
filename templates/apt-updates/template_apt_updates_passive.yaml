@@ -26,7 +26,9 @@ zabbix_export:
           triggers:
             - uuid: 5bd367210d3a453b85519c8ba002ad12
               expression: 'last(/Linux updates by Zabbix agent/apt.updates.count)>={$APT.UPDATES.MIN}'
-              name: '{ITEM.LASTVALUE1} Paket-Updates verfügbar'
+              name: 'Paket-Updates verfügbar'
+              opdata: '{ITEM.LASTVALUE1} Pakete'
+              description: 'Die Anzahl steht in den Operational data und wird bei jeder Abfrage aktualisiert.'
               priority: INFO
               tags:
                 - tag: scope
