@@ -51,7 +51,9 @@ zabbix_get -s <host> -k apt.updates.count -t 120
 
    Beide nutzen denselben UserParameter und dieselbe sudo-Regel. Pro Host nur eines der beiden zuweisen, sonst läuft `apt update` doppelt.
 
-Ergebnis: Item **„apt: aktualisierbare Pakete“** und Trigger **„N Paket-Updates verfügbar“** (Information).
+Ergebnis: Item **„apt: aktualisierbare Pakete“** und Trigger **„Paket-Updates verfügbar“** (Information). Die aktuelle Anzahl steht in der Spalte *Operational data* der Problemansicht. Sie wird bei jeder Anzeige neu berechnet, während ein Wert im Problemnamen beim Entstehen des Problems fest eingesetzt würde.
+
+**Template aktualisieren:** Die YAML-Datei erneut importieren und bei *Templates*, *Items* und *Triggers* jeweils „Vorhandene aktualisieren“ anhaken. Die UUIDs sind gleich, Verknüpfungen und Daten bleiben erhalten.
 
 | Makro | Standard | Bedeutung |
 |---|---|---|
