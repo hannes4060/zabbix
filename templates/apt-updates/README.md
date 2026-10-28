@@ -77,7 +77,7 @@ Das Install-Script richtet das automatisch ein. Von Hand:
 install -m 0755 zabbix-apt-check /usr/local/bin/
 
 # nur genau diesen Befehl für Remote-Ausführung freigeben
-echo 'AllowKey=system.run[/usr/local/bin/zabbix-apt-check]' \
+echo 'AllowKey=system.run[/usr/local/bin/zabbix-apt-check,*]' \
   > /etc/zabbix/zabbix_agent2.d/apt-check.conf      # Agent 1: zabbix_agentd.d/
 systemctl restart zabbix-agent2                     # Agent 1: zabbix-agent
 ```

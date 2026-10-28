@@ -663,7 +663,8 @@ configure_agent() {
       echo "Include=${APT_UP_DIR}/*.conf"
     fi
     # Nur genau den Helfer für das Zabbix-Script "apt-Updates prüfen" freigeben
-    ((APT_CHECK_OK)) && echo "AllowKey=system.run[${APT_CHECK_BIN}]"
+    # Zabbix ruft Remote-Befehle als system.run[<Befehl>,wait] auf -> ",*" nötig
+    ((APT_CHECK_OK)) && echo "AllowKey=system.run[${APT_CHECK_BIN},*]"
     [[ $MODE != passive ]] && echo "TLSConnect=psk"   # Agent -> Server (aktiv)
     [[ $MODE != active ]] && echo "TLSAccept=psk"     # Server -> Agent (passiv)
     echo "TLSPSKIdentity=$PSK_IDENTITY"
