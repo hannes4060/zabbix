@@ -50,7 +50,7 @@ PROXY_KEEP=0           # bestehender Host: Überwachung durch Server/Proxy unver
 
 # ---------- Zusatz: apt-Updates (templates/apt-updates im Repo) --------------
 ZBX_REPO_RAW="${ZBX_REPO_RAW:-https://raw.githubusercontent.com/hannes4060/zabbix/main}"
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo .)
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || echo .)
 APT_DIR="templates/apt-updates"
 APT_SUDOERS="/etc/sudoers.d/zabbix-apt"
 APT_SUDO_RULE="zabbix ALL=(root) NOPASSWD: /usr/bin/apt-get update -qq"
@@ -1017,6 +1017,58 @@ final_report() {
 }
 
 # =============================================================================
+#  Aufräumen: Script-Datei bzw. sauberen Git-Clone nach Rückfrage löschen
+# =============================================================================
+cleanup_self() {
+  local path top url reason=""
+  path=$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)
+  # Per "curl | bash" o. ä. gestartet -> keine Datei zum Löschen
+  [[ -n $path && -f $path && $path != /dev/* && $path != /proc/* ]] || return 0
+
+  header "Aufräumen"
+  if [[ -d $SCRIPT_DIR/.git ]]; then
+    top=$SCRIPT_DIR
+    # Nur einen sauberen Clone dieses Repos anbieten – sonst droht Datenverlust
+    if ! command -v git >/dev/null 2>&1; then
+      reason="git ist nicht installiert, der Zustand des Clones lässt sich nicht prüfen"
+    else
+      url=$(git -C "$top" config --get remote.origin.url 2>/dev/null || true)
+      if [[ ! $url =~ [/:]hannes4060/zabbix(\.git)?/?$ ]]; then
+        reason="kein Clone von hannes4060/zabbix (origin: ${url:-keiner})"
+      elif [[ -n $(git -C "$top" status --porcelain 2>/dev/null) ]]; then
+        reason="es gibt geänderte oder ungetrackte Dateien"
+      elif ! git -C "$top" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        reason="der Branch hat kein Upstream – ungepushte Commits nicht prüfbar"
+      elif [[ $(git -C "$top" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1) != 0 ]]; then
+        reason="es gibt lokale Commits, die nicht gepusht sind"
+      elif [[ -n $(git -C "$top" stash list 2>/dev/null) ]]; then
+        reason="es gibt einen git stash"
+      fi
+    fi
+    # Grundsätzlich nie Systemverzeichnisse oder Home-Verzeichnisse löschen
+    case $top in
+      / | /root | /home | /home/* | /etc | /etc/* | /usr | /usr/* | /var | /opt | /srv | /tmp)
+        [[ $top == /home/*/* || $top == /tmp/* ]] || reason="Verzeichnis $top ist geschützt" ;;
+    esac
+    [[ $top == "$HOME" ]] && reason="Verzeichnis ist das Home-Verzeichnis"
+
+    if [[ -n $reason ]]; then
+      info "Git-Clone $top bleibt erhalten: $reason."
+      return 0
+    fi
+    if ask_yn "Git-Clone $top löschen (sauber, alles gepusht)?" n; then
+      cd / && rm -rf -- "$top" && ok "Git-Clone $top gelöscht."
+      info "Stand deine Shell in $top, wechsle mit 'cd ~' heraus."
+    fi
+  else
+    if ask_yn "Script-Datei $path löschen?" n; then
+      rm -f -- "$path" && ok "Script-Datei $path gelöscht."
+    fi
+  fi
+  return 0
+}
+
+# =============================================================================
 #  Ablauf
 # =============================================================================
 main() {
@@ -1041,6 +1093,7 @@ main() {
   test_apt_updates
   register_host
   final_report
+  cleanup_self
 }
 
 main "$@"

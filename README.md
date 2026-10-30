@@ -110,6 +110,16 @@ Funktionen nachzurüsten (apt-Updates, Menü-Script) oder den Helfer zu aktualis
   vorhandene Template-Verknüpfungen bleiben erhalten.
 - Ein bereits vorhandenes Menü-Script „apt-Updates prüfen“ wird nicht verändert.
 
+### Aufräumen nach der Installation
+
+Am Ende fragt das Script, ob es sich selbst löschen soll (Standard: nein):
+
+- **Einzelne Datei** (per `curl` geladen): „Script-Datei löschen?“
+- **Git-Clone:** wird nur angeboten, wenn der Clone von `hannes4060/zabbix`
+  stammt und sauber ist: keine geänderten oder ungetrackten Dateien, keine
+  ungepushten Commits, kein Stash. Sonst nennt das Script den Grund und lässt
+  den Clone stehen.
+
 ### Modi
 
 | Modus | Agent-Konfig | Frontend (API) |
