@@ -22,6 +22,7 @@ set -Eeuo pipefail
 ZBX_VERSION_DEFAULT="${ZBX_VERSION:-8.0}"
 PSK_FILE="/etc/zabbix/zabbix_agent.psk"
 LOGFILE="/var/log/zabbix-agent-install.log"
+BACKUP_KEEP="${ZBX_BACKUP_KEEP:-3}"   # so viele Konfig-Backups behalten
 BLOCK_BEGIN="# BEGIN zabbix-agent-install"
 BLOCK_END="# END zabbix-agent-install"
 
@@ -35,7 +36,7 @@ TARGETS=""         # Adressen wie eingegeben (für ServerActive)
 CONF_SERVER="" CONF_SERVER_ACTIVE=""
 HOST_NAME="" HOST_IP=""
 PSK_IDENTITY="" PSK_KEY="" PSK_REUSED=0
-REMOVE_OTHER=0 OPEN_UFW=0 CONF_BACKUP=""
+REMOVE_OTHER=0 OPEN_UFW=0 CONF_BACKUP="" AGENT_RUNNING=0
 USE_API=0 API_DONE=0
 API_URL="${ZBX_API_URL:-}" API_TOKEN="${ZBX_API_TOKEN:-}" API_RESULT="" API_ERR="" API_VERSION=""
 CURL_OPTS=()
@@ -49,7 +50,7 @@ PROXY_KEEP=0           # bestehender Host: Überwachung durch Server/Proxy unver
 
 # ---------- Zusatz: apt-Updates (templates/apt-updates im Repo) --------------
 ZBX_REPO_RAW="${ZBX_REPO_RAW:-https://raw.githubusercontent.com/hannes4060/zabbix/main}"
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo .)
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || echo .)
 APT_DIR="templates/apt-updates"
 APT_SUDOERS="/etc/sudoers.d/zabbix-apt"
 APT_SUDO_RULE="zabbix ALL=(root) NOPASSWD: /usr/bin/apt-get update -qq"
@@ -808,11 +809,33 @@ start_agent() {
   systemctl restart "$AGENT_SVC" >>"$LOGFILE" 2>&1 || true
   sleep 3
   if systemctl is-active --quiet "$AGENT_SVC"; then
+    AGENT_RUNNING=1
     ok "$AGENT_SVC läuft."
   else
     warn "$AGENT_SVC läuft NICHT. Letzte Logzeilen:"
     tail -n 15 "$AGENT_LOG" 2>/dev/null >&2 || journalctl -u "$AGENT_SVC" -n 15 --no-pager >&2 || true
   fi
+}
+
+# Alte Konfig-Backups aufräumen – nur wenn der Agent nach dem Lauf läuft,
+# sonst bleiben alle Backups als Rückfallebene erhalten
+prune_backups() {
+  local -a baks
+  local b n
+  if ((!AGENT_RUNNING)); then
+    info "Agent läuft nicht – alte Konfig-Backups bleiben erhalten."
+    return 0
+  fi
+  [[ $BACKUP_KEEP =~ ^[0-9]+$ ]] && ((BACKUP_KEEP >= 1)) || BACKUP_KEEP=3
+  # Nur eigene Backups (.bak.JJJJMMTT-HHMMSS) – alphabetisch = chronologisch
+  mapfile -t baks < <(compgen -G "${AGENT_CONF}.bak.*" |
+    grep -E '\.bak\.[0-9]{8}-[0-9]{6}$' | sort -r || true)
+  n=0
+  for b in "${baks[@]:$BACKUP_KEEP}"; do
+    rm -f -- "$b" && n=$((n + 1))
+  done
+  ((n)) && ok "$n alte Konfig-Backup(s) gelöscht, die letzten $BACKUP_KEEP bleiben."
+  return 0
 }
 
 check_ports() {
@@ -994,6 +1017,58 @@ final_report() {
 }
 
 # =============================================================================
+#  Aufräumen: Script-Datei bzw. sauberen Git-Clone nach Rückfrage löschen
+# =============================================================================
+cleanup_self() {
+  local path top url reason=""
+  path=$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)
+  # Per "curl | bash" o. ä. gestartet -> keine Datei zum Löschen
+  [[ -n $path && -f $path && $path != /dev/* && $path != /proc/* ]] || return 0
+
+  header "Aufräumen"
+  if [[ -d $SCRIPT_DIR/.git ]]; then
+    top=$SCRIPT_DIR
+    # Nur einen sauberen Clone dieses Repos anbieten – sonst droht Datenverlust
+    if ! command -v git >/dev/null 2>&1; then
+      reason="git ist nicht installiert, der Zustand des Clones lässt sich nicht prüfen"
+    else
+      url=$(git -C "$top" config --get remote.origin.url 2>/dev/null || true)
+      if [[ ! $url =~ [/:]hannes4060/zabbix(\.git)?/?$ ]]; then
+        reason="kein Clone von hannes4060/zabbix (origin: ${url:-keiner})"
+      elif [[ -n $(git -C "$top" status --porcelain 2>/dev/null) ]]; then
+        reason="es gibt geänderte oder ungetrackte Dateien"
+      elif ! git -C "$top" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        reason="der Branch hat kein Upstream – ungepushte Commits nicht prüfbar"
+      elif [[ $(git -C "$top" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1) != 0 ]]; then
+        reason="es gibt lokale Commits, die nicht gepusht sind"
+      elif [[ -n $(git -C "$top" stash list 2>/dev/null) ]]; then
+        reason="es gibt einen git stash"
+      fi
+    fi
+    # Grundsätzlich nie Systemverzeichnisse oder Home-Verzeichnisse löschen
+    case $top in
+      / | /root | /home | /home/* | /etc | /etc/* | /usr | /usr/* | /var | /opt | /srv | /tmp)
+        [[ $top == /home/*/* || $top == /tmp/* ]] || reason="Verzeichnis $top ist geschützt" ;;
+    esac
+    [[ $top == "$HOME" ]] && reason="Verzeichnis ist das Home-Verzeichnis"
+
+    if [[ -n $reason ]]; then
+      info "Git-Clone $top bleibt erhalten: $reason."
+      return 0
+    fi
+    if ask_yn "Git-Clone $top löschen (sauber, alles gepusht)?" n; then
+      cd / && rm -rf -- "$top" && ok "Git-Clone $top gelöscht."
+      info "Stand deine Shell in $top, wechsle mit 'cd ~' heraus."
+    fi
+  else
+    if ask_yn "Script-Datei $path löschen?" n; then
+      rm -f -- "$path" && ok "Script-Datei $path gelöscht."
+    fi
+  fi
+  return 0
+}
+
+# =============================================================================
 #  Ablauf
 # =============================================================================
 main() {
@@ -1013,10 +1088,12 @@ main() {
   configure_agent
   open_firewall
   start_agent
+  prune_backups
   check_ports
   test_apt_updates
   register_host
   final_report
+  cleanup_self
 }
 
 main "$@"
