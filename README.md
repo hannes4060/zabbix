@@ -98,7 +98,10 @@ Script – sonst liefe `apt update` doppelt.
 Das Script kann auf bereits eingerichteten Hosts erneut laufen, z. B. um neue
 Funktionen nachzurüsten (apt-Updates, Menü-Script) oder den Helfer zu aktualisieren:
 
-- Agent-Konfiguration: nur der verwaltete Block wird ersetzt, vorher Backup.
+- Agent-Konfiguration: nur der verwaltete Block wird ersetzt, vorher Backup
+  (`<conf>.bak.<Datum-Uhrzeit>`). Läuft der Agent danach, werden ältere Backups
+  gelöscht und die letzten 3 behalten (`ZBX_BACKUP_KEEP` ändert die Anzahl).
+  Läuft er nicht, bleiben alle Backups erhalten.
   Server, Hostname und PSK-Identity aus der bestehenden Konfiguration werden
   als Vorgabe angeboten, der vorhandene PSK kann weiterverwendet werden.
 - Frontend: Die aktuelle Überwachung (Server, Proxy) wird ausgelesen und nur

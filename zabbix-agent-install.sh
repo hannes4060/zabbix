@@ -22,6 +22,7 @@ set -Eeuo pipefail
 ZBX_VERSION_DEFAULT="${ZBX_VERSION:-8.0}"
 PSK_FILE="/etc/zabbix/zabbix_agent.psk"
 LOGFILE="/var/log/zabbix-agent-install.log"
+BACKUP_KEEP="${ZBX_BACKUP_KEEP:-3}"   # so viele Konfig-Backups behalten
 BLOCK_BEGIN="# BEGIN zabbix-agent-install"
 BLOCK_END="# END zabbix-agent-install"
 
@@ -35,7 +36,7 @@ TARGETS=""         # Adressen wie eingegeben (für ServerActive)
 CONF_SERVER="" CONF_SERVER_ACTIVE=""
 HOST_NAME="" HOST_IP=""
 PSK_IDENTITY="" PSK_KEY="" PSK_REUSED=0
-REMOVE_OTHER=0 OPEN_UFW=0 CONF_BACKUP=""
+REMOVE_OTHER=0 OPEN_UFW=0 CONF_BACKUP="" AGENT_RUNNING=0
 USE_API=0 API_DONE=0
 API_URL="${ZBX_API_URL:-}" API_TOKEN="${ZBX_API_TOKEN:-}" API_RESULT="" API_ERR="" API_VERSION=""
 CURL_OPTS=()
@@ -808,11 +809,33 @@ start_agent() {
   systemctl restart "$AGENT_SVC" >>"$LOGFILE" 2>&1 || true
   sleep 3
   if systemctl is-active --quiet "$AGENT_SVC"; then
+    AGENT_RUNNING=1
     ok "$AGENT_SVC läuft."
   else
     warn "$AGENT_SVC läuft NICHT. Letzte Logzeilen:"
     tail -n 15 "$AGENT_LOG" 2>/dev/null >&2 || journalctl -u "$AGENT_SVC" -n 15 --no-pager >&2 || true
   fi
+}
+
+# Alte Konfig-Backups aufräumen – nur wenn der Agent nach dem Lauf läuft,
+# sonst bleiben alle Backups als Rückfallebene erhalten
+prune_backups() {
+  local -a baks
+  local b n
+  if ((!AGENT_RUNNING)); then
+    info "Agent läuft nicht – alte Konfig-Backups bleiben erhalten."
+    return 0
+  fi
+  [[ $BACKUP_KEEP =~ ^[0-9]+$ ]] && ((BACKUP_KEEP >= 1)) || BACKUP_KEEP=3
+  # Nur eigene Backups (.bak.JJJJMMTT-HHMMSS) – alphabetisch = chronologisch
+  mapfile -t baks < <(compgen -G "${AGENT_CONF}.bak.*" |
+    grep -E '\.bak\.[0-9]{8}-[0-9]{6}$' | sort -r || true)
+  n=0
+  for b in "${baks[@]:$BACKUP_KEEP}"; do
+    rm -f -- "$b" && n=$((n + 1))
+  done
+  ((n)) && ok "$n alte Konfig-Backup(s) gelöscht, die letzten $BACKUP_KEEP bleiben."
+  return 0
 }
 
 check_ports() {
@@ -1013,6 +1036,7 @@ main() {
   configure_agent
   open_firewall
   start_agent
+  prune_backups
   check_ports
   test_apt_updates
   register_host
