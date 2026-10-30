@@ -43,6 +43,9 @@ GROUP_NAME="" GROUP_ID="" GROUP_CREATE=0
 TEMPLATE_NAME="" TEMPLATE_ID=""
 PROXY_ID="" PROXY_NAME="" MONITORED_BY=0
 HOST_ID=""
+HOST_UPDATE=1          # bestehender Host: PSK/TLS aktualisieren
+CUR_MB="" CUR_PROXY="" # bestehender Host: aktuelle Überwachung (monitored_by/proxyid)
+PROXY_KEEP=0           # bestehender Host: Überwachung durch Server/Proxy unverändert lassen
 
 # ---------- Zusatz: apt-Updates (templates/apt-updates im Repo) --------------
 ZBX_REPO_RAW="${ZBX_REPO_RAW:-https://raw.githubusercontent.com/hannes4060/zabbix/main}"
@@ -421,14 +424,14 @@ api_setup() {
   done
 
   # --- Existiert der Host bereits? ---
-  api host.get "$(jq -nc --arg h "$HOST_NAME" '{output:["hostid"], filter:{host:[$h]}}')"
+  api host.get "$(jq -nc --arg h "$HOST_NAME" '{output:["hostid","monitored_by","proxyid"], filter:{host:[$h]}}')"
   HOST_ID=$(jq -r '.[0].hostid // empty' <<<"$API_RESULT")
   if [[ -n $HOST_ID ]]; then
+    CUR_MB=$(jq -r '.[0].monitored_by // "0"' <<<"$API_RESULT")
+    CUR_PROXY=$(jq -r '.[0].proxyid // "0"' <<<"$API_RESULT")
     warn "Host '$HOST_NAME' existiert bereits im Frontend (ID $HOST_ID)."
-    if ! ask_yn "PSK- und Proxy-Einstellungen dieses Hosts aktualisieren?" j; then
-      USE_API=0
-      return 0
-    fi
+    # Ein "Nein" betrifft nur PSK/TLS – Templates und Menü-Script werden trotzdem ergänzt
+    ask_yn "PSK-Einstellungen dieses Hosts im Frontend aktualisieren?" j || HOST_UPDATE=0
   else
     # --- Hostgruppe ---
     while :; do
@@ -511,15 +514,40 @@ api_setup() {
 
   # --- Proxy ---
   MONITORED_BY=0
+  local -a pnames=() pids=()
+  local i pdef=1 cur_name=""
+  api proxy.get '{"output":["proxyid","name"],"sortfield":"name"}'
+  mapfile -t pnames < <(jq -r '.[].name' <<<"$API_RESULT")
+  mapfile -t pids < <(jq -r '.[].proxyid' <<<"$API_RESULT")
+  for i in "${!pids[@]}"; do
+    [[ ${pids[$i]} == "$CUR_PROXY" ]] && pdef=$((i + 1)) && cur_name=${pnames[$i]}
+  done
+
+  # Bestehender Host: aktuelle Zuordnung nur auf ausdrückliche Nachfrage ändern
+  if [[ -n $HOST_ID ]]; then
+    local cur_txt="Zabbix-Server"
+    [[ $CUR_MB == 1 ]] && cur_txt="Proxy '${cur_name:-ID $CUR_PROXY}'"
+    [[ $CUR_MB == 2 ]] && cur_txt="Proxy-Gruppe"
+    info "Im Frontend wird der Host aktuell überwacht durch: $cur_txt"
+    if { [[ $VIA == server && $CUR_MB == 0 ]] || [[ $VIA == proxy && $CUR_MB == 1 && -n $cur_name ]]; } &&
+      ask_yn "Diese Zuordnung beibehalten?" j; then
+      PROXY_KEEP=1
+      return 0
+    fi
+    if ! { [[ $VIA == server && $CUR_MB == 0 ]] || [[ $VIA == proxy && $CUR_MB == 1 ]]; }; then
+      warn "Deine Auswahl ('$VIA') weicht davon ab."
+      if ! ask_yn "Zuordnung im Frontend ändern?" n; then
+        PROXY_KEEP=1
+        return 0
+      fi
+    fi
+  fi
+
   if [[ $VIA == proxy ]]; then
-    api proxy.get '{"output":["proxyid","name"],"sortfield":"name"}'
-    local -a pnames pids
-    mapfile -t pnames < <(jq -r '.[].name' <<<"$API_RESULT")
-    mapfile -t pids < <(jq -r '.[].proxyid' <<<"$API_RESULT")
     if ((${#pids[@]} == 0)); then
       warn "Keine Proxys im Frontend gefunden – Host wird als 'vom Server überwacht' eingetragen."
     else
-      choose c "Welcher Proxy überwacht den Host (im Frontend)?" 1 "${pnames[@]}"
+      choose c "Welcher Proxy überwacht den Host (im Frontend)?" "$pdef" "${pnames[@]}"
       PROXY_ID=${pids[c - 1]}
       PROXY_NAME=${pnames[c - 1]}
       MONITORED_BY=1
@@ -557,7 +585,7 @@ show_summary() {
   fi
   if ((USE_API)); then
     if [[ -n $HOST_ID ]]; then
-      printf '  %-20s %s\n' "API:" "bestehenden Host aktualisieren (ID $HOST_ID)"
+      printf '  %-20s %s\n' "API:" "bestehender Host (ID $HOST_ID): $( ((HOST_UPDATE)) && echo 'PSK aktualisieren' || echo 'PSK unverändert'), Überwachung $( ((PROXY_KEEP)) && echo unverändert || echo "→ ${PROXY_NAME:-Server}")"
     else
       printf '  %-20s %s\n' "API:" "Host anlegen – Gruppe '$GROUP_NAME'$([[ $GROUP_CREATE == 1 ]] && echo ' (neu)')"
       printf '  %-20s %s\n' "Template:" "${TEMPLATE_NAME:-keins}"
@@ -874,30 +902,41 @@ register_host() {
   esac
 
   if [[ -n $HOST_ID ]]; then
-    params=$(jq -nc --arg id "$HOST_ID" --arg idn "$PSK_IDENTITY" --arg psk "$PSK_KEY" \
-      --argjson mb "$MONITORED_BY" --argjson px "$proxy_part" \
-      --argjson tc "$tls_connect" --argjson ta "$tls_accept" \
-      '{hostid:$id, monitored_by:$mb, tls_connect:$tc, tls_accept:$ta,
-        tls_psk_identity:$idn, tls_psk:$psk} + $px')
-    if api_call host.update "$params"; then
-      ok "Host '$HOST_NAME' aktualisiert (ID $HOST_ID)."
-      API_DONE=1
-      if [[ $MODE == active ]] &&
-        api_call hostinterface.get "$(jq -nc --arg id "$HOST_ID" '{output:["interfaceid"], hostids:[$id], filter:{type:1}}')" &&
-        [[ $(jq 'length' <<<"$API_RESULT") -gt 0 ]]; then
-        warn "Der bestehende Host hat noch ein Agent-Interface – bei reinen Aktiv-Checks kannst du es im Frontend entfernen."
-      fi
-      # Template ergänzen, ohne bestehende Verknüpfungen anzufassen
-      if [[ -n $APT_TPL_ID ]] && ((!APT_TPL_LINKED)); then
-        if api_call host.massadd "$(jq -nc --arg h "$HOST_ID" --arg t "$APT_TPL_ID" \
-          '{hosts:[{hostid:$h}], templates:[{templateid:$t}]}')"; then
-          ok "Template '$APT_TPL_NAME' verknüpft."
-        else
-          warn "Template konnte nicht verknüpft werden: $API_ERR"
-        fi
+    # Nur ändern, was gewünscht ist: PSK/TLS und/oder Überwachung durch Server/Proxy
+    local upd='{}'
+    if ((HOST_UPDATE)); then
+      upd=$(jq -nc --arg idn "$PSK_IDENTITY" --arg psk "$PSK_KEY" \
+        --argjson tc "$tls_connect" --argjson ta "$tls_accept" \
+        '{tls_connect:$tc, tls_accept:$ta, tls_psk_identity:$idn, tls_psk:$psk}')
+    fi
+    if ((!PROXY_KEEP)); then
+      upd=$(jq -c --argjson mb "$MONITORED_BY" --argjson px "$proxy_part" '. + {monitored_by:$mb} + $px' <<<"$upd")
+    fi
+    if [[ $upd != '{}' ]]; then
+      params=$(jq -c --arg id "$HOST_ID" '. + {hostid:$id}' <<<"$upd")
+      if api_call host.update "$params"; then
+        ok "Host '$HOST_NAME' aktualisiert (ID $HOST_ID)."
+        API_DONE=1
+      else
+        warn "host.update fehlgeschlagen: $API_ERR"
       fi
     else
-      warn "host.update fehlgeschlagen: $API_ERR"
+      ok "Host '$HOST_NAME': PSK und Überwachung unverändert gelassen."
+      API_DONE=1
+    fi
+    if [[ $MODE == active ]] &&
+      api_call hostinterface.get "$(jq -nc --arg id "$HOST_ID" '{output:["interfaceid"], hostids:[$id], filter:{type:1}}')" &&
+      [[ $(jq 'length' <<<"$API_RESULT") -gt 0 ]]; then
+      warn "Der bestehende Host hat noch ein Agent-Interface – bei reinen Aktiv-Checks kannst du es im Frontend entfernen."
+    fi
+    # Template ergänzen, ohne bestehende Verknüpfungen anzufassen
+    if [[ -n $APT_TPL_ID ]] && ((!APT_TPL_LINKED)); then
+      if api_call host.massadd "$(jq -nc --arg h "$HOST_ID" --arg t "$APT_TPL_ID" \
+        '{hosts:[{hostid:$h}], templates:[{templateid:$t}]}')"; then
+        ok "Template '$APT_TPL_NAME' verknüpft."
+      else
+        warn "Template konnte nicht verknüpft werden: $API_ERR"
+      fi
     fi
   else
     params=$(jq -nc --arg h "$HOST_NAME" --arg g "$GROUP_ID" --arg ip "$HOST_IP" \

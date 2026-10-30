@@ -93,6 +93,20 @@ GitHub (`ZBX_REPO_RAW` überschreibt die Quelle, z. B. für einen eigenen Fork).
 Ist am bestehenden Host bereits die andere Variante verknüpft, warnt das
 Script – sonst liefe `apt update` doppelt.
 
+### Erneut ausführen (bestehende Hosts)
+
+Das Script kann auf bereits eingerichteten Hosts erneut laufen, z. B. um neue
+Funktionen nachzurüsten (apt-Updates, Menü-Script) oder den Helfer zu aktualisieren:
+
+- Agent-Konfiguration: nur der verwaltete Block wird ersetzt, vorher Backup.
+  Server, Hostname und PSK-Identity aus der bestehenden Konfiguration werden
+  als Vorgabe angeboten, der vorhandene PSK kann weiterverwendet werden.
+- Frontend: Die aktuelle Überwachung (Server, Proxy) wird ausgelesen und nur
+  nach ausdrücklicher Bestätigung geändert. Ein „Nein“ zur PSK-Aktualisierung
+  betrifft nur PSK/TLS. Templates und das Menü-Script werden trotzdem ergänzt,
+  vorhandene Template-Verknüpfungen bleiben erhalten.
+- Ein bereits vorhandenes Menü-Script „apt-Updates prüfen“ wird nicht verändert.
+
 ### Modi
 
 | Modus | Agent-Konfig | Frontend (API) |
